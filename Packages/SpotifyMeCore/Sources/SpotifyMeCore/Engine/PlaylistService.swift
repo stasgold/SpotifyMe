@@ -14,8 +14,6 @@ public actor PlaylistService {
     private let bpmFallbacks: [BPMLookup]
     private let cache: FeatureCache
     private let engine: MoodEngine
-    /// Fewer than this many tracks for a mood triggers fetching recommendations.
-    private let minimumTracks: Int
     /// Cap on slow, one-by-one fallback BPM lookups per generation.
     private let maxFallbackLookups: Int
 
@@ -24,13 +22,12 @@ public actor PlaylistService {
 
     public init(spotify: SpotifyAPI, recco: ReccoBeatsAPI = ReccoBeatsAPI(), bpmFallbacks: [BPMLookup],
                 cache: FeatureCache, engine: MoodEngine = MoodEngine(),
-                minimumTracks: Int = 20, maxFallbackLookups: Int = 60) {
+                maxFallbackLookups: Int = 60) {
         self.spotify = spotify
         self.recco = recco
         self.bpmFallbacks = bpmFallbacks
         self.cache = cache
         self.engine = engine
-        self.minimumTracks = minimumTracks
         self.maxFallbackLookups = maxFallbackLookups
     }
 
@@ -47,17 +44,13 @@ public actor PlaylistService {
 
         let needsTempo: Bool
         let wantsMore: Bool
-        let minimum: Int
         switch choice {
         case .builtIn(let mood):
             needsTempo = mood.cadence != nil
-            wantsMore = mood != .surpriseMe
-            minimum = minimumTracks
+            wantsMore = true
         case .custom(let mood):
             needsTempo = mood.needsTempo
-            // Recommendations would be filtered out if new music isn't an allowed source.
-            wantsMore = mood.addRecommendationsWhenShort && mood.sources.contains(.newMusic)
-            minimum = min(minimumTracks, max(1, mood.targetCount))
+            wantsMore = mood.addRecommendationsWhenShort
         }
 
         if needsTempo {
@@ -65,13 +58,18 @@ public actor PlaylistService {
         }
 
         progress(.choosingTracks)
+        let target = engine.targetCount(for: choice)
         var result = engine.playlist(for: choice, from: Array(pool.values))
 
-        if result.count < minimum, wantsMore {
-            progress(.findingMoreTracks)
-            await expandPool(for: choice, seeds: result.map(\.id), progress: progress)
-            progress(.choosingTracks)
-            result = engine.playlist(for: choice, from: Array(pool.values))
+        // Not enough of your own tracks: fetch recommendations aimed at the mood, then fill the gap.
+        if result.count < target, wantsMore {
+            for round in 0..<2 where result.count < target {
+                progress(.findingMoreTracks)
+                await expandPool(for: choice, seeds: seeds(round: round, picked: result), progress: progress)
+                progress(.choosingTracks)
+                let candidates = Array(pool.values)
+                result = engine.filled(engine.playlist(for: choice, from: candidates), for: choice, from: candidates)
+            }
         }
         await cache.save()
         return result
@@ -199,27 +197,21 @@ public actor PlaylistService {
 
     // MARK: - Expansion
 
-    private func expandPool(for choice: MoodChoice, seeds: [String], progress: @Sendable (Progress) -> Void) async {
-        let fallbackSeeds = pool.values.filter { $0.origins.contains(.topShortTerm) || $0.origins.contains(.topMediumTerm) }.map(\.id)
-        let seedIDs = Array((seeds + fallbackSeeds).prefix(5))
-        guard !seedIDs.isEmpty else { return }
-
-        let target: (tempo: Double?, energy: Double?, valence: Double?)
-        switch choice {
-        case .builtIn(let mood):
-            switch mood {
-            case .slowDown: target = (80, 0.3, nil)
-            case .speedUp: target = (128, 0.8, nil)
-            case .running180: target = (180, 0.8, nil)
-            case .running170: target = (170, 0.8, nil)
-            case .feelingGood: target = (118, 0.7, 0.85)
-            case .surpriseMe: target = (nil, nil, nil)
-            }
-        case .custom(let mood):
-            target = (mood.tempo.isEnabled ? mood.tempo.midpoint : nil,
-                      mood.energy.isEnabled ? mood.energy.midpoint : nil,
-                      mood.valence.isEnabled ? mood.valence.midpoint : nil)
+    /// Seed tracks for a recommendation round: the first round follows what was picked,
+    /// later rounds use a random mix of your favorites so they bring different tracks.
+    private func seeds(round: Int, picked: [CandidateTrack]) -> [String] {
+        let favorites = pool.values
+            .filter { !$0.origins.isDisjoint(with: [.topShortTerm, .topMediumTerm, .topLongTerm, .liked]) }
+            .map(\.id)
+        if round == 0 {
+            return Array((picked.map(\.id).shuffled() + favorites.shuffled()).prefix(5))
         }
+        return Array(favorites.shuffled().prefix(5))
+    }
+
+    private func expandPool(for choice: MoodChoice, seeds seedIDs: [String], progress: @Sendable (Progress) -> Void) async {
+        guard !seedIDs.isEmpty else { return }
+        let target = MoodEngine.targetProfile(for: choice)
         guard let recs = try? await recco.recommendations(seedIDs: seedIDs, size: 100, tempo: target.tempo,
                                                          energy: target.energy, valence: target.valence) else { return }
         add(recs, origin: .recommendation)

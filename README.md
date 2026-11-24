@@ -11,7 +11,7 @@ An iPhone app that reads your Spotify listening history and builds mood playlist
 | **Feeling Good** | Positivity (valence) ≥ 0.65, energy 0.5–0.85, danceability ≥ 0.6 | No artist twice in a row |
 | **Surprise Me** | ~40% "forgotten favorites" (all-time top tracks you haven't played lately) + ~60% new recommendations | Shuffled |
 
-Each playlist has about 30 tracks, with at most 2 per artist. For a running mood, if there aren't enough tracks at ±5 BPM, the window widens to ±8 BPM. If a mood still has fewer than 20 tracks, the app adds recommendations aimed at that mood's tempo and energy. Saving a mood again **updates the same playlist** rather than creating a duplicate.
+Each playlist has about 30 tracks, with at most 2 per artist. For a running mood, if there aren't enough tracks at ±5 BPM, the window widens to ±8 BPM. If your own tracks don't fill a mood's playlist (30 tracks, or a custom mood's track count), the app fetches recommendations aimed at that mood's tempo, energy and positivity and fills the remaining slots with the ones that fit best, even if they miss a strict rule. They're labeled **Recommended** in the track list. Spotify no longer offers recommendations to new apps, so these come from ReccoBeats, seeded with your Spotify tracks. Saving a mood again **updates the same playlist** rather than creating a duplicate.
 
 ## How it works
 

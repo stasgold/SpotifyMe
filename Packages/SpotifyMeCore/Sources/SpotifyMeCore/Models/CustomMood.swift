@@ -82,7 +82,7 @@ public struct CustomMood: Codable, Hashable, Identifiable, Sendable {
     public var maxPerArtist: Int
     /// Avoid the same artist twice in a row (applied after ordering, except for tempo/energy orders).
     public var spreadArtists: Bool
-    /// Fetch recommendations aimed at these settings when too few tracks match.
+    /// When too few tracks match, fill up to `targetCount` with the recommendations closest to these settings.
     public var addRecommendationsWhenShort: Bool
 
     public init(id: UUID = UUID(), name: String = "My Mood", symbol: String = "music.note", colorIndex: Int = 0,

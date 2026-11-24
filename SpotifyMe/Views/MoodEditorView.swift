@@ -165,11 +165,13 @@ struct MoodEditorView: View {
             if mood.order == .bestMatchFirst || mood.order == .shuffled {
                 Toggle("Avoid same artist back to back", isOn: $mood.spreadArtists)
             }
-            if mood.sources.contains(.newMusic) {
-                Toggle("Add recommendations if too few match", isOn: $mood.addRecommendationsWhenShort)
-            }
+            Toggle("Fill up with recommendations", isOn: $mood.addRecommendationsWhenShort)
         } header: {
             Text("Playlist")
+        } footer: {
+            if mood.addRecommendationsWhenShort {
+                Text("If your own tracks don't reach \(mood.targetCount), recommended tracks closest to this mood fill the rest, even if they miss some filters.")
+            }
         }
     }
 }
