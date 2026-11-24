@@ -65,6 +65,8 @@ You need a Mac with Xcode 16 or later.
    ```
 5. Choose your iPhone or a simulator and press **Run**.
 
+On first launch the app asks for a **Spotify Client ID** (and an optional GetSongBPM key) and stores them on the device, so each person can use their own Spotify developer app. You can change them later under **About → Change Client ID or API keys**. Values in `Config.xcconfig` are optional and only act as defaults.
+
 Run the unit tests with `swift test` in `Packages/SpotifyMeCore`, or with ⌘U in Xcode.
 
 ## Continuous integration
