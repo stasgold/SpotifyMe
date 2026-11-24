@@ -1,0 +1,13 @@
+// Copy this file to Config.xcconfig (which is git-ignored) and fill in your values.
+
+// From https://developer.spotify.com/dashboard -> your app -> Settings.
+SPOTIFY_CLIENT_ID =
+
+// Optional. Free key from https://getsongbpm.com/api (used as a BPM fallback).
+GETSONGBPM_API_KEY =
+
+// Your Apple developer team ID (Xcode > Settings > Accounts), needed to run on a real iPhone.
+DEVELOPMENT_TEAM =
+
+// Must be unique to you, e.g. com.yourname.spotifyme
+APP_BUNDLE_ID = com.example.spotifyme
