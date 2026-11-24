@@ -67,6 +67,58 @@ You need a Mac with Xcode 16 or later.
 
 Run the unit tests with `swift test` in `Packages/SpotifyMeCore`, or with ⌘U in Xcode.
 
+## Continuous integration
+
+`.github/workflows/ios.yml` runs the unit tests and builds the app for the iOS Simulator on every push. It needs no setup.
+
+## Install on your iPhone with TestFlight (no Mac needed)
+
+`.github/workflows/testflight.yml` signs the app and uploads it to TestFlight. It needs a paid Apple Developer Program membership ($99/year). There are four one-time steps.
+
+### 1. Register the app with Apple
+1. In [Certificates, Identifiers & Profiles → Identifiers](https://developer.apple.com/account/resources/identifiers/list), click **+**, choose **App IDs → App**, and register an explicit Bundle ID, e.g. `com.yourname.spotifyme`.
+2. In [App Store Connect → Apps](https://appstoreconnect.apple.com/apps), click **+ → New App**:
+   - Platform: iOS
+   - Name: e.g. "SpotifyMe Personal". The name must be unique on the App Store, and Apple may reject names containing "Spotify".
+   - Bundle ID: the one you just registered
+   - SKU: anything, e.g. `spotifyme`
+
+### 2. Create an App Store Connect API key
+In [App Store Connect → Users and Access → Integrations → App Store Connect API](https://appstoreconnect.apple.com/access/integrations/api), click **Generate API Key**.
+- Give it **Admin** access. Admin is needed so the build can create signing certificates in Apple's cloud; with lower access, the archive step fails with a signing error.
+- Download the `.p8` file. Apple only lets you download it once.
+- Note the **Key ID** and the **Issuer ID**, which is shown above the list of keys.
+
+Your **Team ID** is under [Membership details](https://developer.apple.com/account#MembershipDetailsCard).
+
+### 3. Add GitHub secrets
+In GitHub, go to **Settings → Secrets and variables → Actions**.
+
+**Secrets** tab:
+
+| Secret | Value |
+|---|---|
+| `APPLE_TEAM_ID` | your 10-character Team ID |
+| `ASC_KEY_ID` | the API key's Key ID |
+| `ASC_ISSUER_ID` | the Issuer ID |
+| `ASC_PRIVATE_KEY` | the full contents of the `.p8` file, including the `BEGIN`/`END` lines |
+| `SPOTIFY_CLIENT_ID` | your Spotify app's Client ID |
+| `GETSONGBPM_API_KEY` | *(optional)* your GetSongBPM key |
+
+**Variables** tab:
+
+| Variable | Value |
+|---|---|
+| `APP_BUNDLE_ID` | the Bundle ID from step 1 |
+
+### 4. Run it
+1. Go to **Actions → Upload to TestFlight → Run workflow**. You can also push a tag such as `v1.0.1`.
+2. After about 10 minutes, plus Apple's processing time, the build appears under **App Store Connect → your app → TestFlight**.
+3. Add yourself as an **internal tester**. Internal testing needs no Apple review.
+4. Install the **TestFlight** app on your iPhone and accept the invite.
+
+Each run gets a new build number (the GitHub run number). TestFlight builds expire after 90 days, so run the workflow again for a fresh one.
+
 ## Spotify limits to know about
 
 Since February/March 2026, apps in Spotify's **Development Mode** have these restrictions:
