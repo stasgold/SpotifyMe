@@ -18,8 +18,8 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if !AppConfig.isConfigured {
-                MissingConfigView()
+            if !model.isConfigured {
+                NavigationStack { SetupView() }
             } else if model.isSignedIn {
                 MoodGridView()
             } else {
@@ -33,16 +33,6 @@ struct RootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.errorMessage ?? "")
-        }
-    }
-}
-
-struct MissingConfigView: View {
-    var body: some View {
-        ContentUnavailableView {
-            Label("Spotify Client ID missing", systemImage: "key.slash")
-        } description: {
-            Text("Copy Config.example.xcconfig to Config.xcconfig, add your Spotify Client ID, and rebuild. See README.md.")
         }
     }
 }

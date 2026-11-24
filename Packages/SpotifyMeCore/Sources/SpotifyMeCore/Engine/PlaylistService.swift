@@ -38,20 +38,40 @@ public actor PlaylistService {
 
     public func generate(_ mood: Mood, forceRefresh: Bool = false,
                          progress: @Sendable (Progress) -> Void = { _ in }) async throws -> [CandidateTrack] {
+        try await generate(.builtIn(mood), forceRefresh: forceRefresh, progress: progress)
+    }
+
+    public func generate(_ choice: MoodChoice, forceRefresh: Bool = false,
+                         progress: @Sendable (Progress) -> Void = { _ in }) async throws -> [CandidateTrack] {
         try await ensurePool(forceRefresh: forceRefresh, progress: progress)
 
-        if mood.cadence != nil {
+        let needsTempo: Bool
+        let wantsMore: Bool
+        let minimum: Int
+        switch choice {
+        case .builtIn(let mood):
+            needsTempo = mood.cadence != nil
+            wantsMore = mood != .surpriseMe
+            minimum = minimumTracks
+        case .custom(let mood):
+            needsTempo = mood.needsTempo
+            // Recommendations would be filtered out if new music isn't an allowed source.
+            wantsMore = mood.addRecommendationsWhenShort && mood.sources.contains(.newMusic)
+            minimum = min(minimumTracks, max(1, mood.targetCount))
+        }
+
+        if needsTempo {
             await fillMissingTempos(progress: progress)
         }
 
         progress(.choosingTracks)
-        var result = engine.playlist(for: mood, from: Array(pool.values))
+        var result = engine.playlist(for: choice, from: Array(pool.values))
 
-        if result.count < minimumTracks, mood != .surpriseMe {
+        if result.count < minimum, wantsMore {
             progress(.findingMoreTracks)
-            await expandPool(for: mood, seeds: result.map(\.id), progress: progress)
+            await expandPool(for: choice, seeds: result.map(\.id), progress: progress)
             progress(.choosingTracks)
-            result = engine.playlist(for: mood, from: Array(pool.values))
+            result = engine.playlist(for: choice, from: Array(pool.values))
         }
         await cache.save()
         return result
@@ -59,6 +79,10 @@ public actor PlaylistService {
 
     /// Writes the tracks to Spotify. Reuses `existingPlaylistID` if it still exists, else creates a new playlist.
     public func save(_ tracks: [CandidateTrack], mood: Mood, existingPlaylistID: String?) async throws -> SpotifyAPI.CreatedPlaylist {
+        try await save(tracks, choice: .builtIn(mood), existingPlaylistID: existingPlaylistID)
+    }
+
+    public func save(_ tracks: [CandidateTrack], choice mood: MoodChoice, existingPlaylistID: String?) async throws -> SpotifyAPI.CreatedPlaylist {
         let playlist: SpotifyAPI.CreatedPlaylist
         if let existingPlaylistID, await spotify.playlistExists(existingPlaylistID) {
             playlist = SpotifyAPI.CreatedPlaylist(id: existingPlaylistID,
@@ -175,19 +199,26 @@ public actor PlaylistService {
 
     // MARK: - Expansion
 
-    private func expandPool(for mood: Mood, seeds: [String], progress: @Sendable (Progress) -> Void) async {
+    private func expandPool(for choice: MoodChoice, seeds: [String], progress: @Sendable (Progress) -> Void) async {
         let fallbackSeeds = pool.values.filter { $0.origins.contains(.topShortTerm) || $0.origins.contains(.topMediumTerm) }.map(\.id)
         let seedIDs = Array((seeds + fallbackSeeds).prefix(5))
         guard !seedIDs.isEmpty else { return }
 
         let target: (tempo: Double?, energy: Double?, valence: Double?)
-        switch mood {
-        case .slowDown: target = (80, 0.3, nil)
-        case .speedUp: target = (128, 0.8, nil)
-        case .running180: target = (180, 0.8, nil)
-        case .running170: target = (170, 0.8, nil)
-        case .feelingGood: target = (118, 0.7, 0.85)
-        case .surpriseMe: target = (nil, nil, nil)
+        switch choice {
+        case .builtIn(let mood):
+            switch mood {
+            case .slowDown: target = (80, 0.3, nil)
+            case .speedUp: target = (128, 0.8, nil)
+            case .running180: target = (180, 0.8, nil)
+            case .running170: target = (170, 0.8, nil)
+            case .feelingGood: target = (118, 0.7, 0.85)
+            case .surpriseMe: target = (nil, nil, nil)
+            }
+        case .custom(let mood):
+            target = (mood.tempo.isEnabled ? mood.tempo.midpoint : nil,
+                      mood.energy.isEnabled ? mood.energy.midpoint : nil,
+                      mood.valence.isEnabled ? mood.valence.midpoint : nil)
         }
         guard let recs = try? await recco.recommendations(seedIDs: seedIDs, size: 100, tempo: target.tempo,
                                                          energy: target.energy, valence: target.valence) else { return }

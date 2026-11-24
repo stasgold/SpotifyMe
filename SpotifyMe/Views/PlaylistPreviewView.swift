@@ -2,7 +2,7 @@ import SpotifyMeCore
 import SwiftUI
 
 struct PlaylistPreviewView: View {
-    let mood: Mood
+    let choice: MoodChoice
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.openURL) private var openURL
@@ -12,6 +12,15 @@ struct PlaylistPreviewView: View {
     @State private var isLoading = false
     @State private var isSaving = false
     @State private var savedURL: URL?
+    @State private var editing: CustomMood?
+
+    /// The latest version of a custom mood, so edits apply right away.
+    private var mood: MoodChoice {
+        if case .custom(let original) = choice, let current = model.customMood(id: original.id) {
+            return .custom(current)
+        }
+        return choice
+    }
 
     var body: some View {
         List {
@@ -29,7 +38,7 @@ struct PlaylistPreviewView: View {
                 }
             } else {
                 Section {
-                    ForEach(tracks) { TrackRow(candidate: $0, mood: mood) }
+                    ForEach(tracks) { TrackRow(candidate: $0) }
                 } header: {
                     Text("\(tracks.count) tracks · \(durationText)")
                 }
@@ -37,6 +46,12 @@ struct PlaylistPreviewView: View {
         }
         .navigationTitle(mood.title)
         .toolbar {
+            if case .custom(let custom) = mood {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Edit") { editing = custom }
+                        .disabled(isLoading || isSaving)
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { Task { await load(forceRefresh: true) } } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(isLoading || isSaving)
@@ -47,6 +62,11 @@ struct PlaylistPreviewView: View {
             saveBar
         }
         .task { await load(forceRefresh: false) }
+        .sheet(item: $editing) { custom in
+            MoodEditorView(mood: custom, isNew: false) {
+                Task { await load(forceRefresh: false) }
+            }
+        }
     }
 
     @ViewBuilder
@@ -101,7 +121,7 @@ struct PlaylistPreviewView: View {
         isSaving = true
         defer { isSaving = false }
         do {
-            let playlist = try await model.service.save(tracks, mood: mood, existingPlaylistID: model.savedPlaylistID(for: mood))
+            let playlist = try await model.service.save(tracks, choice: mood, existingPlaylistID: model.savedPlaylistID(for: mood))
             model.setSavedPlaylistID(playlist.id, for: mood)
             savedURL = playlist.url
         } catch {
@@ -112,7 +132,6 @@ struct PlaylistPreviewView: View {
 
 struct TrackRow: View {
     let candidate: CandidateTrack
-    let mood: Mood
 
     var body: some View {
         HStack {

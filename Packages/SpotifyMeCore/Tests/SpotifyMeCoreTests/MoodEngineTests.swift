@@ -132,4 +132,56 @@ final class MoodEngineTests: XCTestCase {
         let data = Data(#"{"search":{"error":"no result"}}"#.utf8)
         XCTAssertNil(try JSONDecoder().decode(GetSongBPMAPI.Response.self, from: data).search)
     }
+
+    // MARK: - Custom moods
+
+    func testCustomMoodAppliesEveryEnabledRange() {
+        let mood = CustomMood(tempo: .init(isEnabled: true, min: 100, max: 120),
+                              energy: .init(isEnabled: true, min: 0.5, max: 0.9),
+                              valence: .init(isEnabled: true, min: 0.6, max: 1),
+                              danceability: .init(isEnabled: false, min: 0, max: 1),
+                              acousticness: .init(isEnabled: true, min: 0, max: 0.3))
+        let pool = [
+            track("ok", tempo: 110, energy: 0.7, valence: 0.8, acoustic: 0.1),
+            track("slow", tempo: 90, energy: 0.7, valence: 0.8, acoustic: 0.1),
+            track("sad", tempo: 110, energy: 0.7, valence: 0.3, acoustic: 0.1),
+            track("acoustic", tempo: 110, energy: 0.7, valence: 0.8, acoustic: 0.9),
+            track("noTempo", energy: 0.7, valence: 0.8, acoustic: 0.1)
+        ]
+        XCTAssertEqual(engine.playlist(for: mood, from: pool, rng: &rng).map(\.id), ["ok"])
+    }
+
+    func testCustomMoodHalfTimeAndTempoOrder() {
+        var mood = CustomMood(tempo: .init(isEnabled: true, min: 170, max: 190), countHalfTime: true,
+                              energy: .init(min: 0, max: 1), valence: .init(min: 0, max: 1),
+                              danceability: .init(min: 0, max: 1), acousticness: .init(min: 0, max: 1))
+        mood.order = .tempoRising
+        let pool = [track("a", tempo: 186), track("b", tempo: 88), track("c", tempo: 180), track("d", tempo: 120)]
+        XCTAssertEqual(engine.playlist(for: mood, from: pool, rng: &rng).map(\.id), ["b", "c", "a"])
+        mood.countHalfTime = false
+        XCTAssertEqual(Set(engine.playlist(for: mood, from: pool, rng: &rng).map(\.id)), ["a", "c"])
+    }
+
+    func testCustomMoodSourcesCountAndArtistCap() {
+        var mood = CustomMood(tempo: .init(min: 0, max: 300), energy: .init(min: 0, max: 1),
+                              valence: .init(min: 0, max: 1), danceability: .init(min: 0, max: 1),
+                              acousticness: .init(min: 0, max: 1), sources: [.liked], targetCount: 3, maxPerArtist: 1)
+        let pool = [
+            track("l1", artist: "X", energy: 0.5, origins: [.liked]),
+            track("l2", artist: "X", energy: 0.5, origins: [.liked]),
+            track("l3", artist: "Y", energy: 0.5, origins: [.liked]),
+            track("t1", artist: "Z", energy: 0.5, origins: [.topShortTerm])
+        ]
+        let ids = engine.playlist(for: mood, from: pool, rng: &rng).map(\.id)
+        XCTAssertEqual(ids.count, 2)
+        XCTAssertFalse(ids.contains("t1"))
+        mood.sources = [.liked, .topTracks]
+        XCTAssertEqual(engine.playlist(for: mood, from: pool, rng: &rng).count, 3)
+    }
+
+    func testCustomMoodRoundTripsThroughJSON() throws {
+        let mood = CustomMood(name: "Evening", order: .energyFalling, targetCount: 25)
+        let decoded = try JSONDecoder().decode(CustomMood.self, from: JSONEncoder().encode(mood))
+        XCTAssertEqual(decoded, mood)
+    }
 }
