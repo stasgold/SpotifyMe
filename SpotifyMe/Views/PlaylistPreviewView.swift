@@ -143,6 +143,14 @@ struct TrackRow: View {
                     .lineLimit(1)
             }
             Spacer()
+            if candidate.origins == [.recommendation] {
+                Text("Recommended")
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .foregroundStyle(.tint)
+                    .background(.tint.opacity(0.15), in: Capsule())
+            }
             if let tempo = candidate.features?.tempo {
                 Text("\(Int(tempo.rounded())) BPM")
                     .font(.caption.monospacedDigit())

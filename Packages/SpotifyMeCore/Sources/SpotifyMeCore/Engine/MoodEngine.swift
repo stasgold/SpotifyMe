@@ -50,9 +50,7 @@ public struct MoodEngine: Sendable {
             let score = (0.45 - energy) / 0.45 * 0.6 + acoustic * 0.4
             return (c, score)
         }
-        let picked = pick(scored, rng: &rng)
-        // Wind down: highest energy first, calmest last.
-        return picked.sorted { ($0.features?.energy ?? 0) > ($1.features?.energy ?? 0) }
+        return arrange(pick(scored, rng: &rng), for: .builtIn(.slowDown), rng: &rng)
     }
 
     // MARK: - Speed Up
@@ -63,9 +61,7 @@ public struct MoodEngine: Sendable {
             guard energy >= 0.6, (100...150).contains(tempo) else { return nil }
             return (c, energy)
         }
-        let picked = pick(scored, rng: &rng)
-        // Build: tempo and energy climb together.
-        return picked.sorted { Self.intensity($0) < Self.intensity($1) }
+        return arrange(pick(scored, rng: &rng), for: .builtIn(.speedUp), rng: &rng)
     }
 
     private static func intensity(_ c: CandidateTrack) -> Double {
@@ -121,7 +117,7 @@ public struct MoodEngine: Sendable {
             guard valence >= 0.65, (0.5...0.85).contains(energy), dance >= 0.6 else { return nil }
             return (c, valence * 0.6 + dance * 0.4)
         }
-        return Self.spreadArtists(pick(scored, rng: &rng))
+        return arrange(pick(scored, rng: &rng), for: .builtIn(.feelingGood), rng: &rng)
     }
 
     // MARK: - Surprise Me
@@ -154,8 +150,7 @@ public struct MoodEngine: Sendable {
         take(from: forgotten, upTo: options.targetCount)
         take(from: likedNotRecent, upTo: options.targetCount)
 
-        chosen.shuffle(using: &rng)
-        return Self.spreadArtists(chosen)
+        return arrange(chosen, for: .builtIn(.surpriseMe), rng: &rng)
     }
 
     // MARK: - Custom moods
@@ -181,7 +176,6 @@ public struct MoodEngine: Sendable {
 
     private func customPlaylist<R: RandomNumberGenerator>(_ custom: CustomMood, _ pool: [CandidateTrack], rng: inout R) -> [CandidateTrack] {
         let allowed = custom.allowedOrigins
-        var matchedTempo: [String: Double] = [:]
         let scored: [(CandidateTrack, Double)] = pool.compactMap { c in
             guard !c.origins.isDisjoint(with: allowed) else { return nil }
             let f = c.features
@@ -192,7 +186,6 @@ public struct MoodEngine: Sendable {
                 guard let best = options.filter(custom.tempo.contains)
                     .max(by: { Self.closeness($0, to: custom.tempo) < Self.closeness($1, to: custom.tempo) })
                 else { return nil }
-                matchedTempo[c.id] = best
                 scores.append(Self.closeness(best, to: custom.tempo))
             }
             let ranges: [(CustomMood.Range, Double?)] = [
@@ -207,29 +200,151 @@ public struct MoodEngine: Sendable {
             return (c, score)
         }
 
-        var picked = pick(scored, rng: &rng)
-        func tempo(_ c: CandidateTrack) -> Double { matchedTempo[c.id] ?? c.features?.tempo ?? 0 }
-        func energy(_ c: CandidateTrack) -> Double { c.features?.energy ?? 0.5 }
-        switch custom.order {
-        case .bestMatchFirst: break
-        case .shuffled: picked.shuffle(using: &rng)
-        case .energyRising: picked.sort { energy($0) < energy($1) }
-        case .energyFalling: picked.sort { energy($0) > energy($1) }
-        case .tempoRising: picked.sort { tempo($0) < tempo($1) }
-        case .tempoFalling: picked.sort { tempo($0) > tempo($1) }
-        case .warmUpCoolDown: picked = Self.warmUpCoolDown(picked)
-        }
-        // Reordering by artist would break a deliberate energy/tempo progression.
-        if custom.spreadArtists, custom.order == .bestMatchFirst || custom.order == .shuffled {
-            picked = Self.spreadArtists(picked)
-        }
-        return picked
+        return arrange(pick(scored, rng: &rng), for: .custom(custom), rng: &rng)
     }
 
     /// 1 at the middle of the range, falling to 0 at its edges.
     static func closeness(_ value: Double, to range: CustomMood.Range) -> Double {
         guard range.halfWidth > 0 else { return 1 }
         return max(0, 1 - abs(value - range.midpoint) / range.halfWidth)
+    }
+
+    // MARK: - Ordering
+
+    /// Puts the chosen tracks in the mood's order.
+    func arrange<R: RandomNumberGenerator>(_ tracks: [CandidateTrack], for choice: MoodChoice, rng: inout R) -> [CandidateTrack] {
+        func energy(_ c: CandidateTrack) -> Double { c.features?.energy ?? 0.5 }
+        switch choice {
+        case .builtIn(let mood):
+            switch mood {
+            // Wind down: highest energy first, calmest last.
+            case .slowDown: return tracks.sorted { energy($0) > energy($1) }
+            // Build: tempo and energy climb together.
+            case .speedUp: return tracks.sorted { Self.intensity($0) < Self.intensity($1) }
+            case .running180, .running170: return Self.warmUpCoolDown(tracks)
+            case .feelingGood: return Self.spreadArtists(tracks)
+            case .surpriseMe: return Self.spreadArtists(tracks.shuffled(using: &rng))
+            }
+        case .custom(let custom):
+            func tempo(_ c: CandidateTrack) -> Double { Self.effectiveTempo(c, for: custom) ?? c.features?.tempo ?? 0 }
+            var result = tracks
+            switch custom.order {
+            case .bestMatchFirst: break
+            case .shuffled: result.shuffle(using: &rng)
+            case .energyRising: result.sort { energy($0) < energy($1) }
+            case .energyFalling: result.sort { energy($0) > energy($1) }
+            case .tempoRising: result.sort { tempo($0) < tempo($1) }
+            case .tempoFalling: result.sort { tempo($0) > tempo($1) }
+            case .warmUpCoolDown: result = Self.warmUpCoolDown(result)
+            }
+            // Reordering by artist would break a deliberate energy/tempo progression.
+            if custom.spreadArtists, custom.order == .bestMatchFirst || custom.order == .shuffled {
+                result = Self.spreadArtists(result)
+            }
+            return result
+        }
+    }
+
+    /// The track's tempo as matched against a custom mood (doubled when half-time counts and fits better).
+    static func effectiveTempo(_ c: CandidateTrack, for custom: CustomMood) -> Double? {
+        guard let tempo = c.features?.tempo, tempo > 0 else { return nil }
+        guard custom.tempo.isEnabled, custom.countHalfTime else { return tempo }
+        return abs(tempo * 2 - custom.tempo.midpoint) < abs(tempo - custom.tempo.midpoint) ? tempo * 2 : tempo
+    }
+
+    // MARK: - Filling with recommendations
+
+    /// What a mood aims for. Used to request recommendations and to rank filler tracks.
+    public struct TargetProfile: Sendable, Equatable {
+        public var tempo: Double?
+        public var countHalfTime: Bool
+        public var energy: Double?
+        public var valence: Double?
+    }
+
+    public static func targetProfile(for choice: MoodChoice) -> TargetProfile {
+        switch choice {
+        case .builtIn(let mood):
+            switch mood {
+            case .slowDown: return TargetProfile(tempo: 80, countHalfTime: false, energy: 0.3, valence: nil)
+            case .speedUp: return TargetProfile(tempo: 128, countHalfTime: false, energy: 0.8, valence: nil)
+            case .running180: return TargetProfile(tempo: 180, countHalfTime: true, energy: 0.8, valence: nil)
+            case .running170: return TargetProfile(tempo: 170, countHalfTime: true, energy: 0.8, valence: nil)
+            case .feelingGood: return TargetProfile(tempo: 118, countHalfTime: false, energy: 0.7, valence: 0.85)
+            case .surpriseMe: return TargetProfile(tempo: nil, countHalfTime: false, energy: nil, valence: nil)
+            }
+        case .custom(let mood):
+            return TargetProfile(tempo: mood.tempo.isEnabled ? mood.tempo.midpoint : nil,
+                                 countHalfTime: mood.countHalfTime,
+                                 energy: mood.energy.isEnabled ? mood.energy.midpoint : nil,
+                                 valence: mood.valence.isEnabled ? mood.valence.midpoint : nil)
+        }
+    }
+
+    /// How many tracks the mood's playlist should have.
+    public func targetCount(for choice: MoodChoice) -> Int {
+        if case .custom(let mood) = choice { return max(1, mood.targetCount) }
+        return options.targetCount
+    }
+
+    /// 0...1: how close a track is to the mood's target, without any hard limits.
+    static func softScore(_ c: CandidateTrack, profile: TargetProfile) -> Double {
+        guard let f = c.features else { return 0.2 }
+        var scores: [Double] = []
+        if let target = profile.tempo {
+            if let tempo = f.tempo, tempo > 0 {
+                let dev = profile.countHalfTime ? (cadenceDeviation(tempo: tempo, cadence: target) ?? 60) : abs(tempo - target)
+                scores.append(max(0, 1 - dev / 40))
+            } else {
+                scores.append(0.3)
+            }
+        }
+        if let target = profile.energy { scores.append(f.energy.map { 1 - abs($0 - target) } ?? 0.4) }
+        if let target = profile.valence { scores.append(f.valence.map { 1 - abs($0 - target) } ?? 0.4) }
+        return scores.isEmpty ? 0.5 : scores.reduce(0, +) / Double(scores.count)
+    }
+
+    public func filled(_ picked: [CandidateTrack], for choice: MoodChoice, from pool: [CandidateTrack]) -> [CandidateTrack] {
+        var rng = SystemRandomNumberGenerator()
+        return filled(picked, for: choice, from: pool, rng: &rng)
+    }
+
+    /// Tops the playlist up to its target size with recommended tracks that best fit the mood,
+    /// even if they miss the mood's strict rules, then puts everything back in the mood's order.
+    public func filled<R: RandomNumberGenerator>(_ picked: [CandidateTrack], for choice: MoodChoice,
+                                                 from pool: [CandidateTrack], rng: inout R) -> [CandidateTrack] {
+        var engine = self
+        if case .custom(let mood) = choice {
+            engine.options.targetCount = max(1, mood.targetCount)
+            engine.options.maxPerArtist = max(1, mood.maxPerArtist)
+        }
+        let target = engine.options.targetCount
+        guard picked.count < target else { return picked }
+
+        let profile = Self.targetProfile(for: choice)
+        let used = Set(picked.map(\.id))
+        var counts: [String: Int] = [:]
+        for c in picked { counts[c.track.artistKey, default: 0] += 1 }
+
+        let candidates = Self.deduplicated(pool).filter { $0.origins.contains(.recommendation) && !used.contains($0.id) }
+        let ranked = candidates
+            .map { c in (c, Self.softScore(c, profile: profile) + (jitter(&rng))) }
+            .sorted { $0.1 > $1.1 }
+            .map(\.0)
+
+        var extras: [CandidateTrack] = []
+        for c in ranked where picked.count + extras.count < target {
+            let key = c.track.artistKey
+            guard counts[key, default: 0] < engine.options.maxPerArtist else { continue }
+            counts[key, default: 0] += 1
+            extras.append(c)
+        }
+        guard !extras.isEmpty else { return picked }
+        return engine.arrange(picked + extras, for: choice, rng: &rng)
+    }
+
+    private func jitter<R: RandomNumberGenerator>(_ rng: inout R) -> Double {
+        options.jitter > 0 ? Double.random(in: -options.jitter...options.jitter, using: &rng) : 0
     }
 
     // MARK: - Helpers

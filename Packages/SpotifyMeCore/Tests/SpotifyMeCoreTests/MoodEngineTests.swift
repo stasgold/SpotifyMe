@@ -184,4 +184,57 @@ final class MoodEngineTests: XCTestCase {
         let decoded = try JSONDecoder().decode(CustomMood.self, from: JSONEncoder().encode(mood))
         XCTAssertEqual(decoded, mood)
     }
+
+    // MARK: - Filling with recommendations
+
+    func testFillTopsUpToTargetWithBestFittingRecommendations() {
+        let small = MoodEngine(options: .init(targetCount: 4, maxPerArtist: 2, jitter: 0))
+        let pool = [
+            track("mine1", tempo: 70, energy: 0.2),
+            track("mine2", tempo: 75, energy: 0.3),
+            // Recommendations that miss Slow Down's strict rules by different amounts.
+            track("recClose", tempo: 85, energy: 0.5, origins: [.recommendation]),
+            track("recFar", tempo: 170, energy: 0.95, origins: [.recommendation]),
+            track("recMid", tempo: 105, energy: 0.5, origins: [.recommendation]),
+            // Not a recommendation: never used as filler.
+            track("liked", tempo: 160, energy: 0.9, origins: [.liked])
+        ]
+        let picked = small.playlist(for: .slowDown, from: pool, rng: &rng)
+        XCTAssertEqual(Set(picked.map(\.id)), ["mine1", "mine2"])
+
+        let filled = small.filled(picked, for: .builtIn(.slowDown), from: pool, rng: &rng)
+        XCTAssertEqual(Set(filled.map(\.id)), ["mine1", "mine2", "recClose", "recMid"])
+        // Still in Slow Down order: energy falls.
+        let energies = filled.map { $0.features?.energy ?? 0 }
+        XCTAssertEqual(energies, energies.sorted(by: >))
+    }
+
+    func testFillRespectsArtistCapAndLeavesFullPlaylistsAlone() {
+        let small = MoodEngine(options: .init(targetCount: 3, maxPerArtist: 1, jitter: 0))
+        let pool = [
+            track("r1", artist: "Same", tempo: 128, energy: 0.8, origins: [.recommendation]),
+            track("r2", artist: "Same", tempo: 128, energy: 0.8, origins: [.recommendation]),
+            track("r3", artist: "Other", tempo: 128, energy: 0.8, origins: [.recommendation])
+        ]
+        let filled = small.filled([], for: .builtIn(.speedUp), from: pool, rng: &rng)
+        XCTAssertEqual(filled.count, 2)
+        XCTAssertEqual(Set(filled.map(\.track.primaryArtist)), ["Same", "Other"])
+
+        let full = [track("a"), track("b"), track("c")]
+        XCTAssertEqual(small.filled(full, for: .builtIn(.speedUp), from: pool, rng: &rng).map(\.id), ["a", "b", "c"])
+    }
+
+    func testFillUsesCustomMoodTargetCount() {
+        var mood = CustomMood(tempo: .init(isEnabled: true, min: 100, max: 110), targetCount: 2)
+        mood.sources = [.liked]
+        let pool = [
+            track("r1", tempo: 140, energy: 0.6, origins: [.recommendation]),
+            track("r2", tempo: 112, energy: 0.6, origins: [.recommendation]),
+            track("r3", tempo: 180, energy: 0.6, origins: [.recommendation])
+        ]
+        // No source match at all, but the custom mood's target of 2 is still filled with the closest tempos.
+        XCTAssertTrue(engine.playlist(for: mood, from: pool, rng: &rng).isEmpty)
+        let filled = engine.filled([], for: .custom(mood), from: pool, rng: &rng)
+        XCTAssertEqual(Set(filled.map(\.id)), ["r1", "r2"])
+    }
 }
